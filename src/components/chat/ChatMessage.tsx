@@ -1,0 +1,395 @@
+import { memo, useState } from "react";
+import { motion } from "framer-motion";
+import { Message } from "@/types/chat";
+import { cn } from "@/lib/utils";
+import { Copy, Check, Download, ThumbsUp, Pencil, X, StickyNote } from "lucide-react";
+import { toast } from "sonner";
+import { StructuredResponse, tryParseStructured, structuredToPlainText, Md } from "./StructuredResponse";
+import { ConfidenceIndicator } from "./ConfidenceIndicator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { toText } from "@/lib/safeText";
+import { VerstandenZeile } from "./VerstandenZeile";
+import { RechercheBlock } from "./Arbeitsschritte";
+import { AnswerKeyContext } from "./QuelleList";
+
+export type FeedbackStatus = "correct" | "correction" | "inaccurate" | "note";
+
+interface ChatMessageProps {
+  message: Message;
+  onFeedback?: (messageId: string, status: FeedbackStatus, text?: string) => Promise<boolean> | void | Promise<void>;
+  isAdmin?: boolean;
+  onSaveStatement?: (messageId: string, newText: string) => Promise<true | { error: string }>;
+  onCorrect?: (messageId: string, alternative: string, rerunOf?: string) => void;
+  correctionDisabled?: boolean;
+}
+
+const ChatMessageInner = ({ message, onFeedback, isAdmin = false, onSaveStatement, onCorrect, correctionDisabled }: ChatMessageProps) => {
+  const isUser = message.role === "user";
+
+  // The admin view is gated on the server answer only (check_admin via
+  // chat-proxy, resolved in ChatContainer). It defaults to off.
+
+  const [copied, setCopied] = useState(false);
+  const [modal, setModal] = useState<null | "correction" | "note">(null);
+  const [modalText, setModalText] = useState("");
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [isEditingDraft, setIsEditingDraft] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+
+  const submitted = !!message.feedbackSubmitted;
+
+  // Feedback gating:
+  // - Clarification or chunk-less answers → disable Korrekt/Korrektur/Ungenau, keep Notiz
+  const hasChunks = Array.isArray(message.usedChunkIds) && message.usedChunkIds.length > 0;
+  const isLegacy = !isUser && !hasChunks;
+  const chunkActionsDisabled = !hasChunks;
+  const noteDisabled = false;
+  const legacyTitle = "Feedback nicht verfügbar für ältere Nachrichten";
+  const noChunksTitle = "Keine Quellen-Chunks für Feedback verfügbar";
+
+  const structured = !isUser ? tryParseStructured(message.content) : null;
+  const isErrorPayload = structured?.status === 'error';
+  const hasDraft = !!(structured && typeof structured.entwurf_stellungnahme === "string" && structured.entwurf_stellungnahme.trim().length > 0 && onSaveStatement);
+
+  const handleSaveDraft = async () => {
+    if (!onSaveStatement) return;
+    const trimmed = draftText.trim();
+    if (!trimmed) {
+      setDraftError("Der Entwurf darf nicht leer sein.");
+      return;
+    }
+    setDraftSaving(true);
+    setDraftError(null);
+    try {
+      const result = await onSaveStatement(message.id, trimmed);
+      if (result === true) {
+        setIsEditingDraft(false);
+        toast.success("Gespeichert");
+      } else {
+        setDraftError(result?.error || "Speichern fehlgeschlagen");
+      }
+    } catch (e) {
+      setDraftError(e instanceof Error ? e.message : "Speichern fehlgeschlagen");
+    } finally {
+      setDraftSaving(false);
+    }
+  };
+
+  const sourceCount = (() => {
+    if (!structured) return 0;
+    let count = 0;
+    if (Array.isArray(structured.quellen)) count += structured.quellen.length;
+    else if (typeof structured.quellen === "string" && structured.quellen.trim()) count += 1;
+    return count;
+  })();
+
+  const handleCopy = async () => {
+    const textToCopy = structured ? structuredToPlainText(structured) : message.content;
+    await navigator.clipboard.writeText(textToCopy);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleDownload = (url: string) => {
+    if (!url) {
+      toast.error("Download-Link fehlt");
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const submit = async (status: FeedbackStatus, text?: string): Promise<boolean> => {
+    if (submitting || submitted) return false;
+    setSubmitting(true);
+    try {
+      const result = await onFeedback?.(message.id, status, text);
+      // result may be void or boolean; treat anything but explicit false as success
+      return result !== false;
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openModal = (kind: "correction" | "note") => {
+    setModal(kind);
+    setModalText("");
+    setModalError(null);
+  };
+
+  const handleModalSubmit = async () => {
+    const trimmed = modalText.trim();
+    if (!trimmed) {
+      setModalError(
+        modal === "correction"
+          ? "Bitte geben Sie die korrigierte Antwort ein"
+          : "Bitte geben Sie eine Notiz ein",
+      );
+      return;
+    }
+    const ok = await submit(modal as FeedbackStatus, trimmed);
+    if (ok) {
+      setModal(null);
+      setModalText("");
+      setModalError(null);
+    }
+    // On failure: keep modal open + preserve typed text so admin can retry.
+  };
+
+  const fbBtnBase =
+    "flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+
+  return (
+    <motion.div
+      initial={isUser ? { opacity: 0, y: 10 } : false}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      data-msg-id={message.id}
+      className={cn("group flex py-3", isUser ? "justify-end" : "justify-start")}
+    >
+      <div className={cn("flex min-w-0 flex-col gap-1", isUser ? "max-w-[85%] sm:max-w-[70%] items-end" : "w-full items-start")}>
+        {!isUser && !isErrorPayload && <RechercheBlock report={structured?.arbeitsschritte} />}
+        {!isUser && (
+          <VerstandenZeile
+            verstanden={message.verstanden}
+            onCorrect={onCorrect ? (alt, rerunOf) => onCorrect(message.id, alt, rerunOf) : undefined}
+            disabled={correctionDisabled}
+          />
+        )}
+        {!isUser && message.routingNotice && (
+          <div className="mb-1 inline-flex items-center rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground">
+            {message.routingNotice}
+          </div>
+        )}
+        <div className={cn("relative min-w-0", !isUser && "w-full")}>
+          <div className={cn(isUser ? "user-bubble whitespace-pre-wrap" : "w-full min-w-0 text-foreground")}>
+            {isUser ? (
+              message.content
+            ) : (
+              <>
+                {(message.imageUrl || /<\s*img\s/i.test(message.content)) && (
+                  <div className="mb-2 relative group/img">
+                    <img
+                      src={message.imageUrl || message.content.match(/src=['"](.*?)['"]/)?.[1] || ""}
+                      alt="Generated image"
+                      className="max-w-full rounded-lg"
+                      style={{ maxHeight: "400px" }}
+                    />
+                    <button
+                      onClick={() =>
+                        handleDownload(message.imageUrl || message.content.match(/src=['"](.*?)['"]/)?.[1] || "")
+                      }
+                      className="absolute bottom-2 right-2 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-lg p-2 bg-background/80 backdrop-blur-sm border border-border text-foreground hover:bg-background shadow-sm cursor-pointer"
+                      title="Bild herunterladen"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+                {!/<\s*img\s/i.test(message.content) && (
+                  <AnswerKeyContext.Provider value={toText((structured as any)?.turn_id).trim() || message.id}>
+                  <ErrorBoundary variant="inline" resetKey={message.id}>
+                    {(() => {
+                    if (structured) {
+                      return (
+                        <StructuredResponse
+                          onRetry={onCorrect && !correctionDisabled ? () => onCorrect(message.id, "") : undefined}
+                          data={hasDraft && isEditingDraft ? { ...structured, entwurf_stellungnahme: draftText } : structured}
+                          draftEditor={hasDraft ? {
+                            isEditing: isEditingDraft,
+                            value: draftText,
+                            onChange: (v) => { setDraftText(v); if (draftError) setDraftError(null); },
+                            onSave: handleSaveDraft,
+                            onCancel: () => { setIsEditingDraft(false); setDraftError(null); },
+                            saving: draftSaving,
+                            error: draftError,
+                          } : undefined}
+                        />
+                      );
+                    }
+                    return (
+<Md>{toText(message.content)}</Md>
+                    );
+                    })()}
+                  </ErrorBoundary>
+                  </AnswerKeyContext.Provider>
+                )}
+
+              </>
+            )}
+          </div>
+
+          {!isUser && (
+            <div className="absolute -bottom-1 right-1 translate-y-full flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={handleCopy}
+                className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                title="Text kopieren"
+              >
+                {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+              {hasDraft && !isEditingDraft && (
+                <button
+                  onClick={() => {
+                    setDraftText(structured?.entwurf_stellungnahme || "");
+                    setDraftError(null);
+                    setIsEditingDraft(true);
+                  }}
+                  className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  title="Entwurf bearbeiten"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+
+
+        {!isUser && isAdmin && !isErrorPayload && (
+          <div className="mt-1 w-full">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => submit("correct")}
+                disabled={submitted || submitting || chunkActionsDisabled}
+                title={isLegacy ? legacyTitle : !hasChunks ? noChunksTitle : "Korrekt"}
+                className={cn(
+                  fbBtnBase,
+                  message.feedbackSubmitted === "correct"
+                    ? "bg-green-500/15 text-green-500"
+                    : "text-muted-foreground hover:bg-green-500/10 hover:text-green-500",
+                )}
+              >
+                {message.feedbackSubmitted === "correct" ? <Check className="h-3.5 w-3.5" /> : <ThumbsUp className="h-3.5 w-3.5" />}
+                <span>Korrekt</span>
+              </button>
+
+              <button
+                onClick={() => openModal("correction")}
+                disabled={submitted || submitting || chunkActionsDisabled}
+                title={isLegacy ? legacyTitle : !hasChunks ? noChunksTitle : "Korrektur"}
+                className={cn(
+                  fbBtnBase,
+                  message.feedbackSubmitted === "correction"
+                    ? "bg-yellow-500/15 text-yellow-500"
+                    : "text-muted-foreground hover:bg-yellow-500/10 hover:text-yellow-500",
+                )}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                <span>Korrektur</span>
+              </button>
+
+              <button
+                onClick={() => submit("inaccurate")}
+                disabled={submitted || submitting || chunkActionsDisabled}
+                title={isLegacy ? legacyTitle : !hasChunks ? noChunksTitle : "Ungenau"}
+                className={cn(
+                  fbBtnBase,
+                  message.feedbackSubmitted === "inaccurate"
+                    ? "bg-red-500/15 text-red-500"
+                    : "text-muted-foreground hover:bg-red-500/10 hover:text-red-500",
+                )}
+              >
+                <X className="h-3.5 w-3.5" />
+                <span>Ungenau</span>
+              </button>
+
+              <button
+                onClick={() => openModal("note")}
+                disabled={submitted || submitting || noteDisabled}
+                title={noteDisabled ? legacyTitle : "Notiz"}
+                className={cn(
+                  fbBtnBase,
+                  message.feedbackSubmitted === "note"
+                    ? "bg-blue-500/15 text-blue-500"
+                    : "text-muted-foreground hover:bg-blue-500/10 hover:text-blue-500",
+                )}
+              >
+                <StickyNote className="h-3.5 w-3.5" />
+                <span>Notiz</span>
+              </button>
+
+            </div>
+          </div>
+        )}
+
+        {!isUser && !isErrorPayload && sourceCount > 0 && <ConfidenceIndicator sources={sourceCount} className="px-2" />}
+
+        <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
+          <span>
+            {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+          {!isUser && typeof message.durationMs === "number" && (
+            <span title="Antwortzeit">· Antwort in {(message.durationMs / 1000).toFixed(1)}s</span>
+          )}
+        </div>
+      </div>
+
+      <Dialog open={modal !== null} onOpenChange={(o) => { if (!o) { setModal(null); setModalText(""); setModalError(null); } }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {modal === "correction" ? "Bitte geben Sie die korrekte Antwort ein" : "Notiz für das Team"}
+            </DialogTitle>
+          </DialogHeader>
+          {modal === "correction" && (
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground max-h-40 overflow-y-auto whitespace-pre-wrap">
+              <div className="mb-1 font-medium text-foreground/80">Ursprüngliche Antwort</div>
+              {structured ? structuredToPlainText(structured) : message.content}
+            </div>
+          )}
+          <textarea
+            value={modalText}
+            onChange={(e) => { setModalText(e.target.value); if (modalError) setModalError(null); }}
+            rows={5}
+            placeholder={
+              modal === "correction"
+                ? "Geben Sie die korrekte Antwort ein…"
+                : "Ihre Notiz für das Team…"
+            }
+            className="w-full min-h-[120px] rounded-md border border-border bg-background/50 p-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          {modalError && <p className="text-xs text-destructive">{modalError}</p>}
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => { setModal(null); setModalText(""); setModalError(null); }}
+              className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/50"
+            >
+              Abbrechen
+            </button>
+            <button
+              type="button"
+              onClick={handleModalSubmit}
+              disabled={submitting || modalText.trim().length === 0}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {modal === "correction" ? "Speichern" : "Senden"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+    </motion.div>
+  );
+};
+
+// Finished messages never re-render: compare by id, content and the fields shown.
+const sameMsg = (a: Message, b: Message) =>
+  a === b || (a.id === b.id && a.content === b.content && a.feedbackSubmitted === b.feedbackSubmitted &&
+    a.verstanden === b.verstanden && a.routingNotice === b.routingNotice && a.durationMs === b.durationMs &&
+    a.imageUrl === b.imageUrl && a.timestamp?.getTime?.() === b.timestamp?.getTime?.() &&
+    (a.usedChunkIds?.length ?? 0) === (b.usedChunkIds?.length ?? 0));
+export const ChatMessage = memo(ChatMessageInner, (a, b) =>
+  sameMsg(a.message, b.message) && a.isAdmin === b.isAdmin && a.correctionDisabled === b.correctionDisabled &&
+  a.onFeedback === b.onFeedback && a.onSaveStatement === b.onSaveStatement && a.onCorrect === b.onCorrect);

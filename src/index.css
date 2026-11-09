@@ -1,0 +1,166 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 96%;
+    --foreground: 220 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 15% 15%;
+
+    --primary: 145 60% 32%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 92%;
+    --secondary-foreground: 220 15% 25%;
+
+    --muted: 0 0% 94%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 145 50% 38%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 88%;
+    --input: 0 0% 90%;
+    --ring: 145 60% 32%;
+
+    --radius: 0.75rem;
+
+    /* Custom design tokens */
+    --gradient-primary: linear-gradient(135deg, hsl(145 60% 32%) 0%, hsl(145 50% 42%) 100%);
+    --gradient-surface: linear-gradient(180deg, hsl(0 0% 100% / 0.7) 0%, hsl(0 0% 98% / 0.5) 100%);
+    --gradient-glow: radial-gradient(ellipse at center, hsl(145 60% 32% / 0.08) 0%, transparent 70%);
+    
+    --shadow-glow: 0 0 40px hsl(145 60% 32% / 0.12);
+    --shadow-soft: 0 4px 24px hsl(220 20% 0% / 0.08);
+    
+    --glass-bg: hsl(0 0% 100% / 0.65);
+    --glass-border: hsl(0 0% 80% / 0.4);
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 220 15% 25%;
+    --sidebar-primary: 145 60% 32%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 94%;
+    --sidebar-accent-foreground: 220 15% 25%;
+    --sidebar-border: 0 0% 88%;
+    --sidebar-ring: 145 60% 32%;
+  }
+
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body { overflow: hidden; }
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+  }
+
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+
+  .gradient-surface {
+    background: var(--gradient-surface);
+  }
+
+  .gradient-glow {
+    background: var(--gradient-glow);
+  }
+
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* Reading typography (shared by streamed and finished answers) */
+.answer-md {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px; line-height: 26px; font-weight: 400;
+  color: hsl(var(--foreground)); overflow-wrap: anywhere; min-width: 0;
+}
+.answer-md > :first-child { margin-top: 0; }
+.answer-md p { margin: 8px 0 0; }
+.answer-md ul, .answer-md ol { margin: 8px 0 0; padding-left: 24px; }
+.answer-md ul { list-style: disc; }
+.answer-md ol { list-style: decimal; }
+.answer-md li { margin: 0; }
+.answer-md li > p { margin: 0; }
+.answer-md h1, .answer-md h2 { font-size: 20px; line-height: 28px; font-weight: 600; margin: 24px 0 4px; }
+.answer-md h3, .answer-md h4 { font-size: 17px; line-height: 26px; font-weight: 600; margin: 20px 0 0; }
+.answer-md strong { font-weight: 600; }
+.answer-md a { color: hsl(var(--primary)); text-decoration: underline; }
+.answer-md code { font-size: 14px; background: hsl(var(--muted)); padding: 1px 4px; border-radius: 4px; }
+.answer-md pre { overflow-x: auto; max-width: 100%; }
+.answer-table { overflow-x: auto; max-width: 100%; margin-top: 8px; }
+.answer-table table { border-collapse: collapse; font-size: 14px; }
+.answer-table th, .answer-table td { border: 1px solid hsl(var(--border)); padding: 4px 8px; text-align: left; }
+.answer-tail { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, sans-serif; font-size: 16px; line-height: 26px; margin-top: 8px; }
+.user-bubble {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px; line-height: 24px; border-radius: 22px; padding: 10px 16px;
+  background: hsl(var(--secondary)); color: hsl(var(--foreground)); overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .answer-md h1, .answer-md h2 { font-size: 18px; line-height: 26px; }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+.cite-marker {
+  @apply rounded px-0.5 text-primary hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-primary;
+  font: inherit;
+}
